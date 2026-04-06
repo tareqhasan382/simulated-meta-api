@@ -2,8 +2,9 @@ import { Module } from '@nestjs/common';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { BullModule } from '@nestjs/bullmq';
 import { PrismaModule } from './prisma/prisma.module';
-import { MetaApiModule } from './meta-api/meta-api.module';
-import { InsightsModule } from './insights/insights.module';
+import { MockMetaModule } from './modules/mock-meta/mock-meta.module';
+import { InsightsModule } from './modules/insights/insights.module';
+import { SeederModule } from './modules/seeder/seeder.module';
 
 @Module({
   imports: [
@@ -20,7 +21,10 @@ import { InsightsModule } from './insights/insights.module';
         },
       }),
     }),
-    PrismaModule,MetaApiModule,InsightsModule
+    PrismaModule,
+    MockMetaModule,
+    InsightsModule,
+    SeederModule,
   ],
 })
 export class AppModule {}
