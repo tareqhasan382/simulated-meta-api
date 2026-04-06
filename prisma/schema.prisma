@@ -1,0 +1,22 @@
+datasource db {
+  provider = "postgresql"
+}
+
+generator client {
+  provider     = "prisma-client"
+  output       = "./generated"
+  moduleFormat = "cjs"
+}
+
+model Insight {
+  id          String   @id @default(uuid())
+  campaign_id String
+  date        DateTime
+  impressions Int
+  clicks      Int
+  spend       Float
+  created_at  DateTime @default(now())
+  updated_at  DateTime @updatedAt
+
+  @@unique([campaign_id, date])
+}
