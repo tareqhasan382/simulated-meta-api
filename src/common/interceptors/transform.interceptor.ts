@@ -28,20 +28,30 @@ export class TransformInterceptor<T>
         const response = context.switchToHttp().getResponse();
         const statusCode = response.statusCode || HttpStatus.OK;
 
-        // If data has meta, separate it
-        if (data && data.data && data.meta) {
+        // Extract message if present in the data returned by the service
+        const message = data?.message || 'Success';
+        
+        // Remove message from the final data object if it was extracted
+        let finalData = data;
+        if (data && typeof data === 'object' && 'message' in data) {
+          const { message: _, ...rest } = data;
+          finalData = rest;
+        }
+
+        // Handle meta pagination if present
+        if (finalData && finalData.data && finalData.meta) {
           return {
             statusCode,
-            message: 'Success',
-            data: data.data,
-            meta: data.meta,
+            message,
+            data: finalData.data,
+            meta: finalData.meta,
           };
         }
 
         return {
           statusCode,
-          message: 'Success',
-          data: data || null,
+          message,
+          data: finalData || null,
         };
       }),
     );

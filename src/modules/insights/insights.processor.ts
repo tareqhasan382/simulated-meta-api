@@ -3,7 +3,7 @@ import { Job } from 'bullmq';
 import { Logger, HttpException, HttpStatus } from '@nestjs/common';
 import { MockMetaService } from '../mock-meta/mock-meta.service';
 import { PrismaService } from '../../prisma/prisma.service';
-import { SyncInsightDto } from './dto/sync-insight.dto'; 
+import { SyncInsightDto } from './dto/sync-insight.dto';
 
 @Processor('ad-sync')
 export class InsightsProcessor extends WorkerHost {
@@ -18,21 +18,21 @@ export class InsightsProcessor extends WorkerHost {
 
   /**
    * Main job processing logic.
-   * Handles 429 (Rate Limit) with manual delay and structured error handling.
+   * Handles 429 (Rate Limit) and 500 (Internal Error) with structured logging and progress tracking.
    */
   async process(job: Job<SyncInsightDto>): Promise<any> {
     const { campaign_id, date } = job.data;
     const attempt = job.attemptsMade + 1;
     
-    this.logger.log(`[Job:${job.id}] START - Campaign: ${campaign_id} | Date: ${date} | Attempt: ${attempt}`);
-    await job.updateProgress(10); // Job Progress Tracking
+    this.logger.log(`[Job:${job.id}] PROCESSING | Campaign: ${campaign_id} | Date: ${date} | Attempt: ${attempt}`);
+    await job.updateProgress(10);
 
     try {
       // Step 1: Call Mock Meta API
       const insightData = await this.mockMetaService.getInsights(campaign_id, date);
       await job.updateProgress(50);
 
-      // Step 2: Idempotent Upsert to Postgres
+      // Step 2: Idempotent Upsert to Postgres using composite unique key (campaign_id + date)
       const result = await this.prisma.insight.upsert({
         where: {
           campaign_id_date: {
@@ -55,50 +55,50 @@ export class InsightsProcessor extends WorkerHost {
       });
 
       await job.updateProgress(100);
-      this.logger.log(`[Job:${job.id}] ✅ COMPLETED - Campaign: ${campaign_id} | Record ID: ${result.id}`);
+      this.logger.log(`[Job:${job.id}] SUCCESS | Campaign: ${campaign_id} | Upserted Insight ID: ${result.id}`);
       
       return { success: true, insightId: result.id };
     } catch (error) {
-      this.handleJobError(job, error);
+      await this.handleJobError(job, error);
     }
   }
 
   /**
-   * Specialized error handler to differentiate between 429 Rate Limits and 500 Server Errors.
+   * Specialized error handler to differentiate between 429 Rate Limits and other errors.
    */
   private async handleJobError(job: Job, error: any) {
     const isRateLimit = error instanceof HttpException && error.getStatus() === HttpStatus.TOO_MANY_REQUESTS;
     const attempt = job.attemptsMade + 1;
-
+ 
     if (isRateLimit) {
-      // 429 Handling: Apply a longer delay helper or signal custom retry
-      const waitMs = Math.pow(2, attempt) * 2000; // Longer than normal retry (2s, 4s, 8s...)
-      this.logger.warn(`[Job:${job.id}] ⚠️ RATE LIMIT (429) - Attempt ${attempt}. Applying ${waitMs}ms delay before retry.`);
-      
-      // We re-throw to trigger BullMQ retry strategy, but we could also manually delay if needed.
-      // Here we rely on BullMQ's exponential backoff but add specific logging.
+      // Explicit Rate Limit Handling
+      this.logger.warn(`[Job:${job.id}] RATE_LIMIT_DETECTED | Attempt: ${attempt} | Strategy: BullMQ Exponential Backoff`);
     } else {
-      this.logger.error(`[Job:${job.id}] ❌ FAILED - Attempt ${attempt}. Error: ${error.message}`);
-      // Log full stack trace for 500 errors to help debugging
+      // Generic Error Handling
+      this.logger.error(`[Job:${job.id}] ERROR_DETECTED | Attempt: ${attempt} | Message: ${error.message}`);
       if (error.status === 500) {
         this.logger.debug(error.stack);
       }
     }
 
-    // Re-throw the error so BullMQ can handle the retry logic defined in the service
+    // Re-throw so BullMQ triggers its retry strategy (1s -> 2s -> 4s -> 8s -> 16s)
     throw error;
   }
 
   @OnWorkerEvent('failed')
   onFailed(job: Job, error: Error) {
     const maxAttempts = job.opts.attempts || 5;
-    if (job.attemptsMade >= maxAttempts) {
-      this.logger.error(`[Job:${job.id}] ‼️ CRITICAL - Permanently failed after ${maxAttempts} attempts. Last Error: ${error.message}`);
+    const currentAttempt = job.attemptsMade;
+
+    if (currentAttempt >= maxAttempts) {
+      this.logger.error(`[Job:${job.id}] CRITICAL_FAILURE | Attempts: ${currentAttempt}/${maxAttempts} | Message: ${error.message}`);
+    } else {
+      this.logger.warn(`[Job:${job.id}] RETRY_SCHEDULED | Attempt ${currentAttempt} failed. Backing off...`);
     }
   }
 
   @OnWorkerEvent('completed')
   onCompleted(job: Job) {
-    this.logger.debug(`[Job:${job.id}] Successfully removed from queue.`);
+    this.logger.debug(`[Job:${job.id}] CLEANUP | Job removed from queue`);
   }
 }
